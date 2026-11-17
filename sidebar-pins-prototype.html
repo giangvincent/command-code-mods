@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>CC Desktop — Sidebar Pins Prototype</title>
+<style>
+*{box-sizing:border-box}body{margin:0;font:13px/1.4 system-ui,sans-serif;display:flex;height:100vh;color:#1c1c1c}
+#side{width:330px;border-right:1px solid #e3e3e3;display:flex;flex-direction:column;background:#fafafa}
+#search{margin:10px;padding:7px 10px;border:1px solid #ddd;border-radius:8px}
+#scroll{overflow-y:auto;flex:1;padding:0 10px 80px}
+.sec{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:#888;margin:12px 4px 6px}
+.proj{border:1px solid #e6e6e6;border-radius:10px;background:#fff;margin-bottom:10px;overflow:hidden}
+.phead{display:flex;align-items:center;gap:6px;padding:8px 8px;font-weight:600}
+.phead .pin,.row .pin{opacity:0;border:0;background:none;cursor:pointer;font-size:14px}
+.phead:hover .pin,.row:hover .pin{opacity:1}
+.phead .pin.on,.row .pin.on{opacity:1}
+.phead .t{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.phead .exp{border:0;background:#eee;border-radius:6px;cursor:pointer;padding:2px 8px}
+.plabel{font-size:11px;color:#888;padding:6px 10px 2px}
+.fixed-pin{background:#fffbe8;border-bottom:1px solid #f0e6b8}
+.unpin-collapsed{overflow:hidden}
+.unpin-expanded{overflow-y:auto;max-height:192px}
+.row{display:flex;align-items:center;gap:6px;padding:0 8px;height:32px;white-space:nowrap;overflow:hidden;cursor:pointer;border-radius:6px}
+.row:hover{background:#f2f2f2}.row.active{background:#e8f0ff;font-weight:600}
+.row .t{flex:1;overflow:hidden;text-overflow:ellipsis}
+#fab{position:fixed;right:18px;bottom:18px;width:44px;height:44px;border-radius:50%;border:1px solid #ddd;background:#fff;font-size:20px;cursor:pointer;box-shadow:0 4px 14px rgba(0,0,0,.15)}
+#pop{position:fixed;right:18px;bottom:72px;width:320px;max-height:60vh;overflow:auto;background:#fff;border:1px solid #ddd;border-radius:12px;box-shadow:0 12px 40px rgba(0,0,0,.2);padding:8px;display:none}
+#pop.open{display:block}
+#pop .item{padding:7px 8px;border-radius:8px;cursor:pointer}
+#pop .item.focus{background:#e8f0ff}
+#pop .proj-t{font-weight:700;margin-top:6px}
+#pop .hint,#empty{color:#888;padding:10px}
+#toast{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);background:#222;color:#fff;padding:9px 14px;border-radius:9px;display:none;max-width:80vw}
+#menu{position:fixed;background:#fff;border:1px solid #ddd;border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.15);display:none;z-index:50}
+#menu button{display:block;width:100%;border:0;background:none;padding:8px 14px;text-align:left;cursor:pointer}
+main{flex:1;padding:24px}#kbd{color:#666}
+</style></head><body>
+<div id="side">
+<input id="search" placeholder="Filter sessions…">
+<div id="scroll">
+<div id="pinSec"></div>
+<div id="projSec"></div>
+</div>
+</div>
+<main><h2>Prototype — sidebar pins</h2>
+<p id="kbd">Hover a project/session to pin. Right-click = menu. <b>Cmd/Ctrl+Up</b> jumps to first pinned. <b>↑↓ Enter Esc</b> in popup.</p>
+<p>Rules: Pinned top by pin-time newest first, uncapped. Projects rest by activity. Per project: pinned fixed max 3 by recency, unpinned collapsed 4 rows / expanded 6-row scroll, collapsed default persisted. Active bumps to row 1 unpinned. 4th pin replaces least-recent with toast. Pins in localStorage.</p>
+<div id="cur"></div></main>
+<button id="fab" title="Pinned">📌</button>
+<div id="pop" role="dialog" aria-label="Pinned"></div>
+<div id="toast"></div>
+<div id="menu"><button id="menuBtn"></button></div>
+<script>
+const ROW=32;
+const seed=[
+{id:'p1',name:'commandcode-chat',sessions:[['s11','auth refresh flow',9],['s12','sidebar scroll fix',8],['s13','plugin API',7],['s14','toast styling',6],['s15','search perf',5],['s16','old deploy notes',4],['s17','legacy oauth',3],['s18','spike sqlite',2]]},
+{id:'p2',name:'satomoext-app',sessions:[['s21','analytics map',10],['s22','route task',8],['s23','embed index',6],['s24','scan status',5],['s25','laya decide',4],['s26','old log tail',2],['s27','scratchpad',1]]},
+{id:'p3',name:'personal-temp',sessions:[['s31','laya control',7],['s32','rtk prefix',6],['s33','notes',3],['s34','tmp script',2],['s35','draft',1]]},
+{id:'p4',name:'shopware',sessions:[['s41','lead tool doc',5],['s42','coupon import',4],['s43','db dump',2],['s44','misc',1]]},
+];
+const J=k=>{try{return JSON.parse(localStorage.getItem(k))}catch(e){return null}};
+let pinP=J('cc-pinP')||{}, pinS=J('cc-pinS')||{}, exp=J('cc-exp')||{}, active=localStorage.getItem('cc-active')||'s11';
+const save=()=>{localStorage.setItem('cc-pinP',JSON.stringify(pinP));localStorage.setItem('cc-pinS',JSON.stringify(pinS));localStorage.setItem('cc-exp',JSON.stringify(exp));localStorage.setItem('cc-active',active)};
+const S=(p,id)=>p.sessions.find(s=>s[0]===id);
+const act=p=>Math.max(...p.sessions.map(s=>s[2]));
+function toast(m){const t=document.getElementById('toast');t.textContent=m;t.style.display='block';clearTimeout(t._x);t._x=setTimeout(()=>t.style.display='none',2600)}
+function unpinnedList(p){const pinned=new Set(pinS[p.id]||[]);let u=p.sessions.filter(s=>!pinned.has(s[0]));
+u.sort((a,b)=>b[2]-a[2]);const ai=u.findIndex(s=>s[0]===active);
+if(ai>0){const[a]=u.splice(ai,1);u.unshift(a)}return u}
+function pinnedList(p){const pinned=new Set(pinS[p.id]||[]);return p.sessions.filter(s=>pinned.has(s[0])).sort((a,b)=>b[2]-a[2])}
+function togglePinProject(pid){if(pinP[pid])delete pinP[pid];else pinP[pid]=Date.now();save();render()}
+function togglePinSession(pid,sid){let arr=pinS[pid]||[];if(arr.includes(sid)){pinS[pid]=arr.filter(x=>x!==sid)}
+else{if(arr.length>=3){const pl=pinnedList(seed.find(p=>p.id===pid));const evict=pl[pl.length-1];arr=arr.filter(x=>x!==evict[0]);toast(`Replaced "${evict[1]}" with "${S(seed.find(p=>p.id===pid),sid)[1]}" — max 3 pinned`)}
+arr.push(sid);pinS[pid]=arr}save();render()}
+function rowHtml(pid,s,isPin){return `<div class="row${s[0]===active?' active':''}" data-p="${pid}" data-s="${s[0]}" tabindex="0"><button class="pin${isPin?' on':''}" data-pin-s="${pid}:${s[0]}" title="${isPin?'Unpin':'Pin'}">${isPin?'📌':'📍'}</button><span class="t">${s[1]}</span></div>`}
+function projCard(p,q){const isP=!!pinP[p.id];const pl=pinnedList(p).filter(s=>!q||s[1].toLowerCase().includes(q));
+let u=unpinnedList(p).filter(s=>!q||s[1].toLowerCase().includes(q));
+const isExp=!!exp[p.id];const vis=isExp?u:u.slice(0,4);
+return `<div class="proj" data-proj="${p.id}"><div class="phead"><button class="pin${isP?' on':''}" data-pin-p="${p.id}">${isP?'📌':'📍'}</button><span class="t">${p.name}</span><button class="exp" data-exp="${p.id}">${isExp?'−':`+${Math.max(0,u.length-4)}`}</button></div>`
++(pl.length?`<div class="plabel">Pinned · ${pl.length}/3</div><div class="fixed-pin">${pl.map(s=>rowHtml(p.id,s,true)).join('')}</div>`:'')
++`<div class="plabel">Sessions</div><div class="${isExp?'unpin-expanded':'unpin-collapsed'}" data-unpin="${p.id}">${vis.map(s=>rowHtml(p.id,s,false)).join('')||'<div class="hint">No match</div>'}</div></div>`}
+function render(){const q=document.getElementById('search').value.toLowerCase();
+let pinnedProjs=seed.filter(p=>pinP[p.id]).sort((a,b)=>pinP[b.id]-pinP[a.id]);
+let rest=seed.filter(p=>!pinP[p.id]).sort((a,b)=>act(b)-act(a));
+if(q){const f=p=>p.name.toLowerCase().includes(q)||p.sessions.some(s=>s[1].toLowerCase().includes(q));pinnedProjs=pinnedProjs.filter(f);rest=rest.filter(f)}
+document.getElementById('pinSec').innerHTML=pinnedProjs.length?`<div class="sec">Pinned · ${pinnedProjs.length}</div>`+pinnedProjs.map(p=>projCard(p,q)).join(''):'';
+document.getElementById('projSec').innerHTML=`<div class="sec">Projects</div>`+(rest.map(p=>projCard(p,q)).join('')||'<div id="empty">No projects match.</div>');
+document.getElementById('cur').innerHTML=`Active: <b>${active}</b> · pinned projects: ${Object.keys(pinP).length}`;
+const un=document.querySelector(`[data-unpin] .row.active`);if(un&&exp[un.dataset.p])un.scrollIntoView({block:'nearest'});
+const fp=document.querySelector(`.fixed-pin .row.active`);if(fp)fp.scrollIntoView({block:'nearest'});
+renderPop()}
+let flat=[],fi=0,lastFocus=null;
+function renderPop(){const pop=document.getElementById('pop');flat=[];
+let pinnedProjs=seed.filter(p=>pinP[p.id]).sort((a,b)=>pinP[b.id]-pinP[a.id]);
+if(!pinnedProjs.length&&!Object.values(pinS).flat().length){pop.innerHTML=`<div class="hint">No pinned projects or sessions yet — hover a project or session to pin it.</div>`;return}
+let h='';pinnedProjs.forEach(p=>{h+=`<div class="proj-t">${p.name}</div>`;flat.push({t:p.name,pid:p.id});
+pinnedList(p).forEach(s=>{h+=`<div class="item" data-p="${p.id}" data-s="${s[0]}">📌 ${s[1]}</div>`;flat.push({t:s[1],pid:p.id,sid:s[0]})})});
+Object.entries(pinS).forEach(([pid,arr])=>{if(pinP[pid]||!arr.length)return;const p=seed.find(x=>x.id===pid);if(!p)return;
+h+=`<div class="proj-t">${p.name} (sessions only)</div>`;pinnedList(p).forEach(s=>{h+=`<div class="item" data-p="${pid}" data-s="${s[0]}">📌 ${s[1]}</div>`;flat.push({t:s[1],pid,pid,sid:s[0]})})});
+pop.innerHTML=h||`<div class="hint">No pinned projects or sessions yet.</div>`;
+[...pop.querySelectorAll('.item')].forEach((el,i)=>el.onclick=()=>{openFlat(i)})}
+function openPop(){lastFocus=document.activeElement;renderPop();document.getElementById('pop').classList.add('open');fi=0;paintFocus()}
+function closePop(){document.getElementById('pop').classList.remove('open');if(lastFocus&&lastFocus.focus)lastFocus.focus()}
+function paintFocus(){[...document.querySelectorAll('#pop .item')].forEach((el,i)=>el.classList.toggle('focus',i===fi));const el=document.querySelectorAll('#pop .item')[fi];if(el)el.scrollIntoView({block:'nearest'})}
+function openFlat(i){const f=flat[i];if(!f)return;if(f.sid){active=f.sid;save();render()}closePop()}
+document.getElementById('fab').onclick=e=>{e.stopPropagation();document.getElementById('pop').classList.contains('open')?closePop():openPop()};
+document.getElementById('search').oninput=render;
+document.addEventListener('click',e=>{
+const pp=e.target.closest('[data-pin-p]');if(pp){togglePinProject(pp.dataset.pinP);return}
+const ps=e.target.closest('[data-pin-s]');if(ps){const[pid,sid]=ps.dataset.pinS.split(':');togglePinSession(pid,sid);return}
+const ex=e.target.closest('[data-exp]');if(ex){const id=ex.dataset.exp;exp[id]=!exp[id];save();render();return}
+const r=e.target.closest('.row');if(r){active=r.dataset.s;const p=seed.find(x=>x.id===r.dataset.p);const s=S(p,active);if(s)s[2]=Date.now()%100000;save();render();return}
+if(!e.target.closest('#pop')&&!e.target.closest('#fab'))closePop();hideMenu()});
+let menuTarget=null;
+document.addEventListener('contextmenu',e=>{const r=e.target.closest('.row,.phead');if(!r)return;e.preventDefault();
+menuTarget=r;const m=document.getElementById('menu');const b=document.getElementById('menuBtn');
+if(r.classList.contains('row')){const{ p,s}=r.dataset;const is=(pinS[p]||[]).includes(s);b.textContent=is?`Unpin session`:`Pin session (max 3)`;b.onclick=()=>{togglePinSession(p,s);hideMenu()}}
+else{const pid=r.closest('.proj').dataset.proj;b.textContent=pinP[pid]?'Unpin project':'Pin project to top';b.onclick=()=>{togglePinProject(pid);hideMenu()}}
+m.style.display='block';m.style.left=e.clientX+'px';m.style.top=e.clientY+'px'});
+function hideMenu(){document.getElementById('menu').style.display='none'}
+document.addEventListener('keydown',e=>{
+const typing=/INPUT|TEXTAREA/.test(document.activeElement.tagName);
+if((e.metaKey||e.ctrlKey)&&e.key==='ArrowUp'){e.preventDefault();openPop();return}
+if(!document.getElementById('pop').classList.contains('open'))return;
+if(e.key==='ArrowDown'){e.preventDefault();fi=Math.min(flat.length-1,fi+1);paintFocus()}
+if(e.key==='ArrowUp'&&!e.metaKey&&!e.ctrlKey){e.preventDefault();fi=Math.max(0,fi-1);paintFocus()}
+if(e.key==='Enter'){openFlat(fi)}if(e.key==='Escape'){closePop()}});
+render();
+</script></body></html>
